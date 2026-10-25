@@ -34,6 +34,15 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "plugin_version=$plugin_version" >> "$GITHUB_OUTPUT"
 
+      - name: Make checked-out plugin writable to container user
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The official image runs as its own non-root user. The mounted
+          # GitHub workspace is owned by the runner, so allow the container
+          # user to create node_modules and yarn-error.log in this ephemeral job.
+          chmod -R a+rwX plugins/main
+
       - name: Build in official Wazuh OSD environment
         shell: bash
         run: |
