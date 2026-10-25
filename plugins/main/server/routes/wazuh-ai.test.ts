@@ -57,7 +57,15 @@ const createContext = (username = 'analyst') => {
 
 const createResponse = () => ({
   ok: jest.fn(value => ({ statusCode: 200, ...value })),
-  custom: jest.fn(value => value),
+  custom: jest.fn(value => {
+    if (
+      value.statusCode >= 400 &&
+      (typeof value.body?.message !== 'string' || !value.body.message.trim())
+    ) {
+      throw new Error('expected error message to be provided');
+    }
+    return value;
+  }),
 });
 
 const createRequest = (username = 'analyst', body = {}) =>
@@ -159,7 +167,11 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
 
     expect(result).toEqual({
       statusCode: 403,
-      body: { ok: false, error: 'Access to this alert is denied' },
+      body: {
+        ok: false,
+        error: 'Access to this alert is denied',
+        message: 'Access to this alert is denied',
+      },
     });
     expect(needle).not.toHaveBeenCalled();
   });
@@ -177,9 +189,70 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
 
     expect(result).toEqual({
       statusCode: 404,
-      body: { ok: false, error: 'Alert is unavailable' },
+      body: {
+        ok: false,
+        error: 'Alert is unavailable',
+        message: 'Alert is unavailable',
+      },
     });
     expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('returns a Dashboard-compatible safe error for an upstream 503 without a message', async () => {
+    needle.mockResolvedValue({
+      statusCode: 503,
+      body: { ok: false, error: 'private backend detail' },
+    });
+    const result = await controller.analyzeAlert(
+      createContext(),
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 503,
+      body: {
+        ok: false,
+        error: 'AI analysis is temporarily unavailable',
+        message: 'AI analysis is temporarily unavailable',
+      },
+    });
+  });
+
+  it('returns a safe Dashboard-compatible error for malformed upstream JSON', async () => {
+    needle.mockResolvedValue({ statusCode: 200, body: '{malformed' });
+    const result = await controller.analyzeAlert(
+      createContext(),
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 503,
+      body: {
+        ok: false,
+        error: 'AI analysis is temporarily unavailable',
+        message: 'AI analysis is temporarily unavailable',
+      },
+    });
+  });
+
+  it('hides parser details when Needle rejects malformed upstream JSON', async () => {
+    needle.mockRejectedValue(new SyntaxError('private parser detail'));
+    const result = await controller.analyzeAlert(
+      createContext(),
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 503,
+      body: {
+        ok: false,
+        error: 'AI analysis is temporarily unavailable',
+        message: 'AI analysis is temporarily unavailable',
+      },
+    });
   });
 
   it('forwards only allowlisted fields and ignores client-supplied alert content', async () => {
@@ -316,7 +389,11 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
 
     expect(result).toEqual({
       statusCode: 401,
-      body: { ok: false, error: 'Authentication required' },
+      body: {
+        ok: false,
+        error: 'Authentication required',
+        message: 'Authentication required',
+      },
     });
     expect(context.search).not.toHaveBeenCalled();
     expect(needle).not.toHaveBeenCalled();
@@ -345,7 +422,11 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
 
     expect(result).toEqual({
       statusCode: 400,
-      body: { ok: false, error: 'A valid alert reference is required' },
+      body: {
+        ok: false,
+        error: 'A valid alert reference is required',
+        message: 'A valid alert reference is required',
+      },
     });
     expect(context.search).not.toHaveBeenCalled();
     expect(needle).not.toHaveBeenCalled();
@@ -362,7 +443,11 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
 
     expect(result).toEqual({
       statusCode: 404,
-      body: { ok: false, error: 'Alert is unavailable' },
+      body: {
+        ok: false,
+        error: 'Alert is unavailable',
+        message: 'Alert is unavailable',
+      },
     });
     expect(needle).not.toHaveBeenCalled();
   });
@@ -378,7 +463,11 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
 
     expect(result).toEqual({
       statusCode: 403,
-      body: { ok: false, error: 'Access to this alert is denied' },
+      body: {
+        ok: false,
+        error: 'Access to this alert is denied',
+        message: 'Access to this alert is denied',
+      },
     });
     expect(needle).not.toHaveBeenCalled();
   });
@@ -406,7 +495,11 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
     );
     expect(largeResult).toEqual({
       statusCode: 413,
-      body: { ok: false, error: 'Alert payload is too large' },
+      body: {
+        ok: false,
+        error: 'Alert payload is too large',
+        message: 'Alert payload is too large',
+      },
     });
     expect(needle).not.toHaveBeenCalled();
 
@@ -418,7 +511,11 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
     );
     expect(notesResult).toEqual({
       statusCode: 400,
-      body: { ok: false, error: 'Analyst notes are invalid or too long' },
+      body: {
+        ok: false,
+        error: 'Analyst notes are invalid or too long',
+        message: 'Analyst notes are invalid or too long',
+      },
     });
     expect(notesContext.search).not.toHaveBeenCalled();
     expect(needle).not.toHaveBeenCalled();
@@ -441,6 +538,61 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
       body: {
         ok: false,
         error: 'AI report generation is temporarily unavailable',
+        message: 'AI report generation is temporarily unavailable',
+      },
+    });
+  });
+
+  it('returns a safe error message for an upstream 503 with no message field', async () => {
+    needle.mockResolvedValue({ statusCode: 503, body: { ok: false } });
+    const result = await controller.generateReport(
+      createContext(),
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 503,
+      body: {
+        ok: false,
+        error: 'AI report generation is temporarily unavailable',
+        message: 'AI report generation is temporarily unavailable',
+      },
+    });
+  });
+
+  it('returns a safe error message for a malformed upstream JSON body', async () => {
+    needle.mockResolvedValue({ statusCode: 200, body: '{malformed' });
+    const result = await controller.generateReport(
+      createContext(),
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 503,
+      body: {
+        ok: false,
+        error: 'AI report generation is temporarily unavailable',
+        message: 'AI report generation is temporarily unavailable',
+      },
+    });
+  });
+
+  it('hides parser details when Needle rejects malformed upstream JSON', async () => {
+    needle.mockRejectedValue(new SyntaxError('private parser detail'));
+    const result = await controller.generateReport(
+      createContext(),
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 503,
+      body: {
+        ok: false,
+        error: 'AI report generation is temporarily unavailable',
+        message: 'AI report generation is temporarily unavailable',
       },
     });
   });

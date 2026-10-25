@@ -50,6 +50,7 @@ const MAX_AI_ALERT_BYTES = 256 * 1024;
 const MAX_ANALYST_NOTES_CHARS = 4000;
 const AI_SERVICE_TIMEOUT_MS = 5000;
 const AI_REPORT_TIMEOUT_MS = 30000;
+const DEFAULT_AI_ERROR_MESSAGE = 'AI request could not be completed';
 const ALLOWED_ALERT_FIELDS = [
   '@timestamp',
   'timestamp',
@@ -71,6 +72,28 @@ const ALLOWED_ALERT_FIELDS = [
   'data.authentication_result',
   'data.win.system.eventID',
 ];
+
+function safeErrorResponse(
+  response: OpenSearchDashboardsResponseFactory,
+  statusCode: number,
+  message: string,
+) {
+  const safeMessage =
+    message
+      .replace(/[\r\n\t]/g, ' ')
+      .trim()
+      .slice(0, 240) || DEFAULT_AI_ERROR_MESSAGE;
+
+  return response.custom({
+    statusCode,
+    body: {
+      ok: false,
+      error: safeMessage,
+      // OpenSearch Dashboards' response adapter requires `message` for errors.
+      message: safeMessage,
+    },
+  });
+}
 
 function matchesAlertIndexPattern(index: string, pattern: unknown): boolean {
   if (
@@ -307,10 +330,7 @@ export class WazuhAiCtrl {
   ) {
     const selected = await this.getSelectedAlert(context, request);
     if (!selected.ok) {
-      return response.custom({
-        statusCode: selected.statusCode,
-        body: { ok: false, error: selected.error },
-      });
+      return safeErrorResponse(response, selected.statusCode, selected.error);
     }
 
     // The Python API applies sanitize_alert before invoking the AI provider.
@@ -342,13 +362,11 @@ export class WazuhAiCtrl {
         typeof upstream.body.analysis !== 'string' ||
         !upstream.body.analysis.trim()
       ) {
-        return response.custom({
-          statusCode: 503,
-          body: {
-            ok: false,
-            error: 'AI analysis is temporarily unavailable',
-          },
-        });
+        return safeErrorResponse(
+          response,
+          503,
+          'AI analysis is temporarily unavailable',
+        );
       }
 
       return response.ok({
@@ -358,10 +376,11 @@ export class WazuhAiCtrl {
         },
       });
     } catch {
-      return response.custom({
-        statusCode: 503,
-        body: { ok: false, error: 'AI analysis is temporarily unavailable' },
-      });
+      return safeErrorResponse(
+        response,
+        503,
+        'AI analysis is temporarily unavailable',
+      );
     }
   }
 
@@ -376,18 +395,16 @@ export class WazuhAiCtrl {
       typeof analystNotes !== 'string' ||
       analystNotes.length > MAX_ANALYST_NOTES_CHARS
     ) {
-      return response.custom({
-        statusCode: 400,
-        body: { ok: false, error: 'Analyst notes are invalid or too long' },
-      });
+      return safeErrorResponse(
+        response,
+        400,
+        'Analyst notes are invalid or too long',
+      );
     }
 
     const selected = await this.getSelectedAlert(context, request);
     if (!selected.ok) {
-      return response.custom({
-        statusCode: selected.statusCode,
-        body: { ok: false, error: selected.error },
-      });
+      return safeErrorResponse(response, selected.statusCode, selected.error);
     }
 
     const evidence = {
@@ -404,10 +421,7 @@ export class WazuhAiCtrl {
     if (
       Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_AI_ALERT_BYTES
     ) {
-      return response.custom({
-        statusCode: 413,
-        body: { ok: false, error: 'Report request is too large' },
-      });
+      return safeErrorResponse(response, 413, 'Report request is too large');
     }
 
     try {
@@ -445,13 +459,11 @@ export class WazuhAiCtrl {
         typeof returnedEvidence.alert !== 'object' ||
         Array.isArray(returnedEvidence.alert)
       ) {
-        return response.custom({
-          statusCode: 503,
-          body: {
-            ok: false,
-            error: 'AI report generation is temporarily unavailable',
-          },
-        });
+        return safeErrorResponse(
+          response,
+          503,
+          'AI report generation is temporarily unavailable',
+        );
       }
 
       return response.ok({
@@ -463,13 +475,11 @@ export class WazuhAiCtrl {
         },
       });
     } catch {
-      return response.custom({
-        statusCode: 503,
-        body: {
-          ok: false,
-          error: 'AI report generation is temporarily unavailable',
-        },
-      });
+      return safeErrorResponse(
+        response,
+        503,
+        'AI report generation is temporarily unavailable',
+      );
     }
   }
 }
