@@ -75,7 +75,9 @@ const WazuhDiscoverComponent = (props: WazuhDiscoverProps) => {
   }
 
   const [results, setResults] = useState<SearchResponse>({} as SearchResponse);
-  const [inspectedHit, setInspectedHit] = useState<any>(undefined);
+  const [inspectedHit, setInspectedHit] = useState<
+    SearchResponse['hits']['hits'][number] | undefined
+  >(undefined);
   const [indexPattern, setIndexPattern] = useState<IndexPattern | undefined>(
     undefined,
   );
