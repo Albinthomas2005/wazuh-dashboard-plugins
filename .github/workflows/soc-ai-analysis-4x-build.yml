@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm \
+          docker run --rm --user 0:0 \
             -v "${{ github.workspace }}/plugins/main:/workspace-plugin" \
             quay.io/wazuh/osd-dev:${{ steps.platform.outputs.version }} \
             bash -lc 'chmod -R a+rwX /workspace-plugin'
