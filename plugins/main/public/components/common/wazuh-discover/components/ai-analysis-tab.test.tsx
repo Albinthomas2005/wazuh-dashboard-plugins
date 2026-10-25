@@ -225,7 +225,9 @@ describe('AIAnalysisTab', () => {
     fireEvent.change(draft, { target: { value: 'Analyst-edited draft' } });
     fireEvent.change(
       screen.getByRole('textbox', { name: 'Analyst-verified findings' }),
-      { target: { value: 'Synthetic finding verified by analyst' } },
+      {
+        target: { value: 'Synthetic finding verified by analyst' },
+      },
     );
     fireEvent.click(screen.getByRole('button', { name: 'Analyze alert' }));
 
@@ -244,7 +246,9 @@ describe('AIAnalysisTab', () => {
     );
 
     expect(markdown).toContain('AI-generated and unverified');
-    expect(markdown).toContain('## Evidence summary (selected record fields)');
+    expect(markdown).toContain(
+      '## Evidence summary (server-fetched, allowlisted, and privacy-filtered fields)',
+    );
     expect(markdown).toContain('"id": "1001"');
     expect(markdown).toContain('## AI-generated report (unverified)');
     expect(markdown).toContain('Edited synthetic report');
@@ -292,7 +296,9 @@ describe('AIAnalysisTab', () => {
     );
     fireEvent.change(
       screen.getByRole('textbox', { name: 'Analyst-verified findings' }),
-      { target: { value: 'Verified synthetic finding' } },
+      {
+        target: { value: 'Verified synthetic finding' },
+      },
     );
     fireEvent.click(
       screen.getByRole('button', {
