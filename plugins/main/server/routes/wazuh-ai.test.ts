@@ -198,7 +198,7 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
     expect(needle).not.toHaveBeenCalled();
   });
 
-  it('returns a Dashboard-compatible safe error for an upstream 503 without a message', async () => {
+  it('maps an upstream 503 without a message to a safe Dashboard error', async () => {
     needle.mockResolvedValue({
       statusCode: 503,
       body: { ok: false, error: 'private backend detail' },
