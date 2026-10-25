@@ -12,6 +12,7 @@ import { IRouter } from 'opensearch_dashboards/server';
 import { schema } from '@osd/config-schema';
 
 const MAX_AI_ALERT_BYTES = 256 * 1024;
+const MAX_ANALYST_NOTES_CHARS = 4000;
 
 export function WazuhAiRoutes(router: IRouter) {
   const ctrl = new WazuhAiCtrl();
@@ -33,5 +34,27 @@ export function WazuhAiRoutes(router: IRouter) {
     },
     (context, request, response) =>
       ctrl.analyzeAlert(context, request, response),
+  );
+
+  router.post(
+    {
+      path: '/api/ai/generate-report',
+      validate: {
+        body: schema.object({
+          index: schema.string(),
+          id: schema.string(),
+          analystNotes: schema.maybe(
+            schema.string({ maxLength: MAX_ANALYST_NOTES_CHARS }),
+          ),
+        }),
+      },
+      options: {
+        body: {
+          maxBytes: MAX_AI_ALERT_BYTES,
+        },
+      },
+    },
+    (context, request, response) =>
+      ctrl.generateReport(context, request, response),
   );
 }

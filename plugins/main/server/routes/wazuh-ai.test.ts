@@ -146,26 +146,23 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
     expect(needle).not.toHaveBeenCalled();
   });
 
-  it(
-    'denies a user whose OpenSearch search is forbidden without calling the AI service',
-    async () => {
-      const context = createContext('restricted-user');
-      context.search.mockRejectedValue({ meta: { statusCode: 403 } });
-      const response = createResponse();
+  it('denies a forbidden OpenSearch search without calling the AI service', async () => {
+    const context = createContext('restricted-user');
+    context.search.mockRejectedValue({ meta: { statusCode: 403 } });
+    const response = createResponse();
 
-      const result = await controller.analyzeAlert(
-        context,
-        createRequest('restricted-user'),
-        response as any,
-      );
+    const result = await controller.analyzeAlert(
+      context,
+      createRequest('restricted-user'),
+      response as any,
+    );
 
-      expect(result).toEqual({
-        statusCode: 403,
-        body: { ok: false, error: 'Access to this alert is denied' },
-      });
-      expect(needle).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toEqual({
+      statusCode: 403,
+      body: { ok: false, error: 'Access to this alert is denied' },
+    });
+    expect(needle).not.toHaveBeenCalled();
+  });
 
   it('does not disclose alerts hidden by document-level security', async () => {
     const context = createContext('scoped-analyst');
@@ -233,5 +230,218 @@ describe('POST /api/ai/analyze-alert controller authorization and privacy', () =
     expect(result.statusCode).toBe(400);
     expect(context.search).not.toHaveBeenCalled();
     expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('generates a report from the current user selected record', async () => {
+    const context = createContext('soc-analyst');
+    const response = createResponse();
+    needle.mockResolvedValue({
+      statusCode: 200,
+      body: {
+        ok: true,
+        status: 'ai_generated_unverified',
+        evidence: {
+          index: alertIndex,
+          id: alertId,
+          alert: { rule: source.rule },
+        },
+        report: 'AI-GENERATED DRAFT — UNVERIFIED',
+      },
+    });
+
+    const result = await controller.generateReport(
+      context,
+      createRequest('soc-analyst', {
+        analystNotes: 'Synthetic investigation context',
+        alert: { full_log: 'client supplied content is ignored' },
+      }),
+      response as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 200,
+      body: {
+        ok: true,
+        status: 'ai_generated_unverified',
+        evidence: {
+          index: alertIndex,
+          id: alertId,
+          alert: { rule: source.rule },
+        },
+        report: 'AI-GENERATED DRAFT — UNVERIFIED',
+      },
+    });
+    expect(context.search).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index: alertIndex,
+        body: expect.objectContaining({
+          query: { ids: { values: [alertId] } },
+        }),
+      }),
+    );
+    expect(needle).toHaveBeenCalledWith(
+      'post',
+      'http://127.0.0.1:5000/api/ai/generate-report',
+      {
+        evidence: {
+          index: alertIndex,
+          id: alertId,
+          alert: {
+            '@timestamp': source['@timestamp'],
+            timestamp: source.timestamp,
+            rule: source.rule,
+            decoder: source.decoder,
+            agent: { id: source.agent.id },
+            data: {
+              srcip: source.data.srcip,
+              dstport: source.data.dstport,
+              authentication_result: source.data.authentication_result,
+            },
+          },
+        },
+        analyst_notes: 'Synthetic investigation context',
+      },
+      expect.objectContaining({ json: true }),
+    );
+  });
+
+  it('rejects report requests from unauthenticated users', async () => {
+    const context = createContext();
+    context.wazuh.security.getCurrentUser.mockResolvedValue(null);
+    const result = await controller.generateReport(
+      context,
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 401,
+      body: { ok: false, error: 'Authentication required' },
+    });
+    expect(context.search).not.toHaveBeenCalled();
+    expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('rejects an index outside the configured alert pattern for report generation', async () => {
+    const context = createContext();
+    const result = await controller.generateReport(
+      context,
+      createRequest('analyst', { index: 'other-index' }),
+      createResponse() as any,
+    );
+
+    expect(result.statusCode).toBe(400);
+    expect(context.search).not.toHaveBeenCalled();
+    expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing selected document ID without searching OpenSearch', async () => {
+    const context = createContext();
+    const result = await controller.generateReport(
+      context,
+      createRequest('analyst', { id: '' }),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 400,
+      body: { ok: false, error: 'A valid alert reference is required' },
+    });
+    expect(context.search).not.toHaveBeenCalled();
+    expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('returns a safe not-found response for missing selected documents', async () => {
+    const context = createContext();
+    context.search.mockResolvedValue({ body: { hits: { hits: [] } } });
+    const result = await controller.generateReport(
+      context,
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 404,
+      body: { ok: false, error: 'Alert is unavailable' },
+    });
+    expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('returns a safe denied response when OpenSearch forbids the search', async () => {
+    const context = createContext();
+    context.search.mockRejectedValue({ meta: { statusCode: 403 } });
+    const result = await controller.generateReport(
+      context,
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 403,
+      body: { ok: false, error: 'Access to this alert is denied' },
+    });
+    expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized records and notes before backend submission', async () => {
+    const largeContext = createContext();
+    largeContext.search.mockResolvedValue({
+      body: {
+        hits: {
+          hits: [
+            {
+              _source: {
+                ...source,
+                rule: { ...source.rule, description: 'x'.repeat(300 * 1024) },
+              },
+            },
+          ],
+        },
+      },
+    });
+    const largeResult = await controller.generateReport(
+      largeContext,
+      createRequest(),
+      createResponse() as any,
+    );
+    expect(largeResult).toEqual({
+      statusCode: 413,
+      body: { ok: false, error: 'Alert payload is too large' },
+    });
+    expect(needle).not.toHaveBeenCalled();
+
+    const notesContext = createContext();
+    const notesResult = await controller.generateReport(
+      notesContext,
+      createRequest('analyst', { analystNotes: 'x'.repeat(4001) }),
+      createResponse() as any,
+    );
+    expect(notesResult).toEqual({
+      statusCode: 400,
+      body: { ok: false, error: 'Analyst notes are invalid or too long' },
+    });
+    expect(notesContext.search).not.toHaveBeenCalled();
+    expect(needle).not.toHaveBeenCalled();
+  });
+
+  it('does not expose backend failures or details to the browser', async () => {
+    const context = createContext();
+    needle.mockResolvedValue({
+      statusCode: 503,
+      body: { ok: false, error: 'private backend detail' },
+    });
+    const result = await controller.generateReport(
+      context,
+      createRequest(),
+      createResponse() as any,
+    );
+
+    expect(result).toEqual({
+      statusCode: 503,
+      body: {
+        ok: false,
+        error: 'AI report generation is temporarily unavailable',
+      },
+    });
   });
 });

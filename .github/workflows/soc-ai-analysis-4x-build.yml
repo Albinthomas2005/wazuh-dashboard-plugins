@@ -1,0 +1,124 @@
+name: SOC AI Analysis Wazuh 4.x build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the selected feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Confirm target plugin and platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const plugin = require('./plugins/main/package.json');
+          if (plugin.name !== 'wazuh') throw new Error('Unexpected plugin name');
+          if (plugin.version !== '4.14.9' || plugin.revision !== '02') {
+            throw new Error('Unexpected Wazuh plugin version');
+          }
+          if (plugin.pluginPlatform?.version !== '2.19.6') {
+            throw new Error('Unexpected OpenSearch Dashboards platform version');
+          }
+          NODE
+
+      - name: Build and validate in the official OSD container
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="wazuh-ai-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          plugin_path=/home/node/kbn/plugins/wazuh
+          image=quay.io/wazuh/osd-dev:2.19.6
+          cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          docker create --name "$container" \
+            -e OPENSEARCH_DASHBOARDS_VERSION=2.19.6 \
+            "$image" bash -lc 'sleep infinity'
+          docker start "$container"
+          docker exec -u 1000:1000 "$container" mkdir -p "$plugin_path"
+
+          # Copy source into the container filesystem; no host plugin mount is used.
+          docker cp "$GITHUB_WORKSPACE/plugins/main/." "$container:$plugin_path/"
+          docker exec -u 0:0 "$container" chown -R 1000:1000 "$plugin_path"
+
+          docker exec -u 1000:1000 -w "$plugin_path" "$container" bash -lc '
+            set -euo pipefail
+            yarn config set registry https://registry.yarnpkg.com
+            yarn install --non-interactive
+            yarn build
+            # The plugin config enables import/no-unused-modules but omits the plugin registration.
+            ./node_modules/.bin/eslint --plugin import --no-cache \
+              public/components/common/wazuh-discover/components/ai-analysis-tab.tsx \
+              public/components/common/wazuh-discover/components/ai-analysis-tab.test.tsx \
+              server/controllers/wazuh-ai.ts \
+              server/routes/wazuh-ai.ts \
+              server/routes/wazuh-ai.test.ts
+            yarn prettier --check \
+              public/components/common/wazuh-discover/components/ai-analysis-tab.tsx \
+              public/components/common/wazuh-discover/components/ai-analysis-tab.test.tsx \
+              server/controllers/wazuh-ai.ts \
+              server/routes/wazuh-ai.ts \
+              server/routes/wazuh-ai.test.ts --config ../../.prettierrc
+            yarn test:jest
+          '
+
+          mkdir -p "$GITHUB_WORKSPACE/plugins/main/build"
+          docker cp "$container:$plugin_path/build/." \
+            "$GITHUB_WORKSPACE/plugins/main/build/"
+
+          mapfile -d '' archives < <(
+            find "$GITHUB_WORKSPACE/plugins/main/build" -maxdepth 1 -type f -name '*.zip' -print0
+          )
+          if [[ "${#archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one plugin ZIP in build output." >&2
+            exit 1
+          fi
+          archive="${archives[0]}"
+          unzip -t "$archive"
+
+          python3 - "$archive" <<'PY'
+          import json
+          import sys
+          import zipfile
+
+          archive = sys.argv[1]
+          with zipfile.ZipFile(archive) as package:
+              names = package.namelist()
+              manifests = [name for name in names if name.rsplit('/', 1)[-1] == 'opensearch_dashboards.json']
+              if len(manifests) != 1:
+                  raise SystemExit('ZIP must contain one plugin manifest')
+              plugin_root = manifests[0].rsplit('/', 1)[0] if '/' in manifests[0] else ''
+              package_path = f'{plugin_root}/package.json' if plugin_root else 'package.json'
+              if package_path not in names:
+                  raise SystemExit('ZIP is missing the plugin package.json')
+              manifest = json.loads(package.read(manifests[0]))
+              metadata = json.loads(package.read(package_path))
+              if manifest.get('id') != 'wazuh' or manifest.get('version') != '4.14.9-02':
+                  raise SystemExit('Unexpected plugin manifest name/version')
+              if metadata.get('name') != 'wazuh' or metadata.get('version') != '4.14.9' or metadata.get('revision') != '02':
+                  raise SystemExit('Unexpected package name/version/revision')
+              if metadata.get('pluginPlatform', {}).get('version') != '2.19.6':
+                  raise SystemExit('Unexpected OpenSearch Dashboards target')
+              if package.testzip() is not None:
+                  raise SystemExit('ZIP integrity check failed')
+          print('Verified wazuh 4.14.9-02 for OpenSearch Dashboards 2.19.6')
+          PY
+
+          echo "PLUGIN_ZIP=$archive" >> "$GITHUB_ENV"
+
+      - name: Upload verified plugin ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: wazuh-4.14.9-ai-analysis
+          path: ${{ env.PLUGIN_ZIP }}
+          if-no-files-found: error
+          retention-days: 7

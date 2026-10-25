@@ -27,6 +27,9 @@ type NeedleResponse = {
   body?: {
     ok?: unknown;
     analysis?: unknown;
+    report?: unknown;
+    evidence?: unknown;
+    status?: unknown;
   };
 };
 
@@ -42,8 +45,11 @@ type NeedlePost = (
 const needle = require('needle') as NeedlePost;
 
 const AI_SERVICE_URL = 'http://127.0.0.1:5000/api/ai/analyze-alert';
+const AI_REPORT_SERVICE_URL = 'http://127.0.0.1:5000/api/ai/generate-report';
 const MAX_AI_ALERT_BYTES = 256 * 1024;
+const MAX_ANALYST_NOTES_CHARS = 4000;
 const AI_SERVICE_TIMEOUT_MS = 5000;
+const AI_REPORT_TIMEOUT_MS = 30000;
 const ALLOWED_ALERT_FIELDS = [
   '@timestamp',
   'timestamp',
@@ -167,28 +173,31 @@ function getErrorStatusCode(error: unknown): unknown {
   return typedError.meta?.statusCode ?? typedError.statusCode;
 }
 
+type SelectedAlertResult =
+  | {
+      ok: true;
+      index: string;
+      id: string;
+      alert: Record<string, unknown>;
+      internalToken: string;
+    }
+  | { ok: false; statusCode: number; error: string };
+
 export class WazuhAiCtrl {
-  async analyzeAlert(
+  private async getSelectedAlert(
     context: RequestHandlerContext,
     request: OpenSearchDashboardsRequest,
-    response: OpenSearchDashboardsResponseFactory,
-  ) {
+  ): Promise<SelectedAlertResult> {
     try {
       const currentUser = await context.wazuh.security.getCurrentUser(
         request,
         context,
       );
       if (!currentUser || typeof currentUser.username !== 'string') {
-        return response.custom({
-          statusCode: 401,
-          body: { ok: false, error: 'Authentication required' },
-        });
+        return { ok: false, statusCode: 401, error: 'Authentication required' };
       }
     } catch {
-      return response.custom({
-        statusCode: 401,
-        body: { ok: false, error: 'Authentication required' },
-      });
+      return { ok: false, statusCode: 401, error: 'Authentication required' };
     }
 
     const body = request.body || {};
@@ -200,44 +209,47 @@ export class WazuhAiCtrl {
       id.length === 0 ||
       Buffer.byteLength(id, 'utf8') > 512
     ) {
-      return response.custom({
+      return {
+        ok: false,
         statusCode: 400,
-        body: { ok: false, error: 'A valid alert reference is required' },
-      });
+        error: 'A valid alert reference is required',
+      };
     }
 
     let configuredPattern: unknown;
     try {
-      configuredPattern = await context.wazuh_core.configuration.getSettingValue(
-        'pattern',
-      );
+      configuredPattern =
+        await context.wazuh_core.configuration.getSettingValue('pattern');
     } catch {
-      return response.custom({
+      return {
+        ok: false,
         statusCode: 503,
-        body: { ok: false, error: 'AI analysis is temporarily unavailable' },
-      });
+        error: 'AI analysis is temporarily unavailable',
+      };
     }
 
     if (!matchesAlertIndexPattern(index, configuredPattern)) {
-      return response.custom({
+      return {
+        ok: false,
         statusCode: 400,
-        body: { ok: false, error: 'A valid alert reference is required' },
-      });
+        error: 'A valid alert reference is required',
+      };
     }
 
     const internalToken = process.env.SOC_AI_INTERNAL_TOKEN;
     if (!internalToken) {
-      return response.custom({
+      return {
+        ok: false,
         statusCode: 503,
-        body: { ok: false, error: 'AI analysis is temporarily unavailable' },
-      });
+        error: 'AI analysis is temporarily unavailable',
+      };
     }
 
     let alert: Record<string, unknown>;
     try {
       // A search made as the signed-in user enforces their index, DLS, and FLS permissions.
-      const searchResult = await context.core.opensearch.client.asCurrentUser.search(
-        {
+      const searchResult =
+        await context.core.opensearch.client.asCurrentUser.search({
           index,
           body: {
             size: 1,
@@ -247,41 +259,57 @@ export class WazuhAiCtrl {
             query: { ids: { values: [id] } },
             _source: ALLOWED_ALERT_FIELDS,
           },
-        },
-      );
+        });
       const source = searchResult?.body?.hits?.hits?.[0]?._source;
       if (!source) {
-        return response.custom({
-          statusCode: 404,
-          body: { ok: false, error: 'Alert is unavailable' },
-        });
+        return { ok: false, statusCode: 404, error: 'Alert is unavailable' };
       }
 
       alert = minimizeAlert(source);
       if (!Object.keys(alert).length) {
-        return response.custom({
+        return {
+          ok: false,
           statusCode: 422,
-          body: { ok: false, error: 'Alert has no analyzable fields' },
-        });
+          error: 'Alert has no analyzable fields',
+        };
       }
     } catch (error) {
       if (getErrorStatusCode(error) === 403) {
-        return response.custom({
+        return {
+          ok: false,
           statusCode: 403,
-          body: { ok: false, error: 'Access to this alert is denied' },
-        });
+          error: 'Access to this alert is denied',
+        };
       }
 
-      return response.custom({
+      return {
+        ok: false,
         statusCode: 503,
-        body: { ok: false, error: 'AI analysis is temporarily unavailable' },
-      });
+        error: 'AI analysis is temporarily unavailable',
+      };
     }
 
     if (Buffer.byteLength(JSON.stringify(alert), 'utf8') > MAX_AI_ALERT_BYTES) {
-      return response.custom({
+      return {
+        ok: false,
         statusCode: 413,
-        body: { ok: false, error: 'Alert payload is too large' },
+        error: 'Alert payload is too large',
+      };
+    }
+
+    return { ok: true, index, id, alert, internalToken };
+  }
+
+  async analyzeAlert(
+    context: RequestHandlerContext,
+    request: OpenSearchDashboardsRequest,
+    response: OpenSearchDashboardsResponseFactory,
+  ) {
+    const selected = await this.getSelectedAlert(context, request);
+    if (!selected.ok) {
+      return response.custom({
+        statusCode: selected.statusCode,
+        body: { ok: false, error: selected.error },
       });
     }
 
@@ -290,11 +318,11 @@ export class WazuhAiCtrl {
       const upstream = await needle(
         'post',
         AI_SERVICE_URL,
-        { alert },
+        { alert: selected.alert },
         {
           json: true,
           headers: {
-            Authorization: `Bearer ${internalToken}`,
+            Authorization: `Bearer ${selected.internalToken}`,
           },
           // Needle names these timeout options with underscores.
           // eslint-disable-next-line camelcase
@@ -305,7 +333,6 @@ export class WazuhAiCtrl {
           read_timeout: AI_SERVICE_TIMEOUT_MS,
         },
       );
-
       if (
         typeof upstream.statusCode !== 'number' ||
         upstream.statusCode < 200 ||
@@ -334,6 +361,114 @@ export class WazuhAiCtrl {
       return response.custom({
         statusCode: 503,
         body: { ok: false, error: 'AI analysis is temporarily unavailable' },
+      });
+    }
+  }
+
+  async generateReport(
+    context: RequestHandlerContext,
+    request: OpenSearchDashboardsRequest,
+    response: OpenSearchDashboardsResponseFactory,
+  ) {
+    const body = request.body || {};
+    const analystNotes = body.analystNotes ?? '';
+    if (
+      typeof analystNotes !== 'string' ||
+      analystNotes.length > MAX_ANALYST_NOTES_CHARS
+    ) {
+      return response.custom({
+        statusCode: 400,
+        body: { ok: false, error: 'Analyst notes are invalid or too long' },
+      });
+    }
+
+    const selected = await this.getSelectedAlert(context, request);
+    if (!selected.ok) {
+      return response.custom({
+        statusCode: selected.statusCode,
+        body: { ok: false, error: selected.error },
+      });
+    }
+
+    const evidence = {
+      index: selected.index,
+      id: selected.id,
+      alert: selected.alert,
+    };
+    const payload = {
+      evidence,
+      // Python API contract uses snake case for the notes field.
+      // eslint-disable-next-line camelcase
+      analyst_notes: analystNotes,
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_AI_ALERT_BYTES
+    ) {
+      return response.custom({
+        statusCode: 413,
+        body: { ok: false, error: 'Report request is too large' },
+      });
+    }
+
+    try {
+      const upstream = await needle('post', AI_REPORT_SERVICE_URL, payload, {
+        json: true,
+        headers: {
+          Authorization: `Bearer ${selected.internalToken}`,
+        },
+        // Needle names these timeout options with underscores.
+        // eslint-disable-next-line camelcase
+        open_timeout: AI_REPORT_TIMEOUT_MS,
+        // eslint-disable-next-line camelcase
+        response_timeout: AI_REPORT_TIMEOUT_MS,
+        // eslint-disable-next-line camelcase
+        read_timeout: AI_REPORT_TIMEOUT_MS,
+      });
+      const returnedEvidence = upstream.body?.evidence as
+        | Record<string, unknown>
+        | undefined;
+
+      if (
+        typeof upstream.statusCode !== 'number' ||
+        upstream.statusCode < 200 ||
+        upstream.statusCode >= 300 ||
+        !upstream.body ||
+        upstream.body.ok !== true ||
+        upstream.body.status !== 'ai_generated_unverified' ||
+        typeof upstream.body.report !== 'string' ||
+        !upstream.body.report.trim() ||
+        !returnedEvidence ||
+        Array.isArray(returnedEvidence) ||
+        returnedEvidence.index !== selected.index ||
+        returnedEvidence.id !== selected.id ||
+        !returnedEvidence.alert ||
+        typeof returnedEvidence.alert !== 'object' ||
+        Array.isArray(returnedEvidence.alert)
+      ) {
+        return response.custom({
+          statusCode: 503,
+          body: {
+            ok: false,
+            error: 'AI report generation is temporarily unavailable',
+          },
+        });
+      }
+
+      return response.ok({
+        body: {
+          ok: true,
+          status: 'ai_generated_unverified',
+          evidence: upstream.body.evidence,
+          report: upstream.body.report,
+        },
+      });
+    } catch {
+      return response.custom({
+        statusCode: 503,
+        body: {
+          ok: false,
+          error: 'AI report generation is temporarily unavailable',
+        },
       });
     }
   }
