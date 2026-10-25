@@ -50,8 +50,6 @@ jobs:
               yarn build
               yarn lint
               yarn test:jest
-              yarn lint
-              yarn test:jest
             '
 
       - name: Verify build output
