@@ -29,45 +29,88 @@ jobs:
           version="$(node -p "require('./plugins/main/package.json').pluginPlatform.version")"
           name="$(node -p "require('./plugins/main/package.json').name")"
           plugin_version="$(node -p "require('./plugins/main/package.json').version")"
+          revision="$(node -p "require('./plugins/main/package.json').revision")"
           test "$version" = "2.19.6"
           test "$name" = "wazuh"
+          test "$plugin_version" = "4.14.9"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "plugin_version=$plugin_version" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
 
       - name: Build in official Wazuh OSD environment
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm \
-            -e OPENSEARCH_DASHBOARDS_VERSION=${{ steps.platform.outputs.version }} \
-            -v "${{ github.workspace }}/plugins/main:/home/node/kbn/plugins/wazuh" \
+          container_id=""
+          cleanup() {
+            if [[ -n "$container_id" ]]; then
+              docker rm -f "$container_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          container_id="$(docker create \
+            -e "OPENSEARCH_DASHBOARDS_VERSION=${{ steps.platform.outputs.version }}" \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/plugins/main,dst=/tmp/wazuh-plugin-source,readonly" \
             quay.io/wazuh/osd-dev:${{ steps.platform.outputs.version }} \
             bash -lc '
               set -euo pipefail
+              test "$(id -un)" = node
+              test -r /tmp/wazuh-plugin-source/package.json
+              test -w /home/node/kbn/plugins
+              mkdir -p /home/node/kbn/plugins/wazuh
+              cp -R /tmp/wazuh-plugin-source/. /home/node/kbn/plugins/wazuh/
               cd /home/node/kbn/plugins/wazuh
+              test -w .
               yarn config set registry https://registry.yarnpkg.com
               yarn install --non-interactive
               yarn build
               yarn lint
               yarn test:jest
-            '
+            ')"
+          docker start --attach "$container_id"
+
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          docker cp \
+            "$container_id:/home/node/kbn/plugins/wazuh/build/." \
+            "$GITHUB_WORKSPACE/artifacts/"
 
       - name: Verify build output
         id: verify
         shell: bash
         run: |
           set -euo pipefail
-          test -d plugins/main/build
-          find plugins/main/build -maxdepth 2 -type f -print
-          archive="$(find plugins/main/build -type f -name '*.zip' -print -quit)"
-          test -n "$archive"
+          find artifacts -maxdepth 2 -type f -print
+          mapfile -t archives < <(find artifacts -maxdepth 1 -type f -name '*.zip' -print)
+          test "${#archives[@]}" -eq 1
+          archive="${archives[0]}"
           unzip -t "$archive"
+          manifest_path="$(unzip -Z1 "$archive" | awk '$0 ~ /(^|\/)opensearch_dashboards\.json$/ { print; exit }')"
+          test -n "$manifest_path"
+          unzip -p "$archive" "$manifest_path" > "$RUNNER_TEMP/wazuh-plugin-manifest.json"
+          python3 - \
+            "$RUNNER_TEMP/wazuh-plugin-manifest.json" \
+            "${{ steps.platform.outputs.name }}" \
+            "${{ steps.platform.outputs.plugin_version }}-${{ steps.platform.outputs.revision }}" <<'PY'
+          import json
+          import sys
+
+          manifest_path, expected_name, expected_version = sys.argv[1:]
+          with open(manifest_path, encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          actual = (manifest.get("id"), manifest.get("version"))
+          expected = (expected_name, expected_version)
+          if actual != expected:
+              raise SystemExit(f"Plugin manifest mismatch: expected {expected}, got {actual}")
+          print(f"Verified plugin {actual[0]} version {actual[1]}")
+          PY
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Upload plugin ZIP
         uses: actions/upload-artifact@v4
         with:
           name: wazuh-4.14.9-ai-analysis
-          path: ${{ steps.verify.outputs.archive }}
+          path: artifacts/*.zip
           if-no-files-found: error
           retention-days: 7
