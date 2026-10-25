@@ -48,10 +48,13 @@ jobs:
 
           # Copy source into the container filesystem; no host plugin mount is used.
           docker cp "$GITHUB_WORKSPACE/plugins/main/." "$container:$plugin_path/"
+          # Use the Wazuh repository formatter settings, not the OSD root config.
+          docker cp "$GITHUB_WORKSPACE/.prettierrc" "$container:/tmp/wazuh-plugin-prettierrc"
           docker exec -u 0:0 "$container" chown -R 1000:1000 "$plugin_path"
 
           docker exec -u 1000:1000 -w "$plugin_path" "$container" bash -lc '
             set -euo pipefail
+            test -r /tmp/wazuh-plugin-prettierrc
             yarn config set registry https://registry.yarnpkg.com
             yarn install --non-interactive
             yarn build
@@ -67,7 +70,7 @@ jobs:
               public/components/common/wazuh-discover/components/ai-analysis-tab.test.tsx \
               server/controllers/wazuh-ai.ts \
               server/routes/wazuh-ai.ts \
-              server/routes/wazuh-ai.test.ts --config ../../.prettierrc
+              server/routes/wazuh-ai.test.ts --config /tmp/wazuh-plugin-prettierrc
             yarn test:jest
           '
 
