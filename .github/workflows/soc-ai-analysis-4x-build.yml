@@ -48,6 +48,8 @@ jobs:
               yarn config set registry https://registry.yarnpkg.com
               yarn install --non-interactive
               yarn build
+              yarn lint
+              yarn test:jest
             '
 
       - name: Verify build output
@@ -61,34 +63,6 @@ jobs:
           test -n "$archive"
           unzip -t "$archive"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
-
-      - name: Lint integration files
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -e OPENSEARCH_DASHBOARDS_VERSION=${{ steps.platform.outputs.version }} \
-            -v "${{ github.workspace }}/plugins/main:/home/node/kbn/plugins/wazuh" \
-            quay.io/wazuh/osd-dev:${{ steps.platform.outputs.version }} \
-            bash -lc '
-              set -euo pipefail
-              cd /home/node/kbn/plugins/wazuh
-              yarn lint
-            '
-
-      - name: Run Jest tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -e OPENSEARCH_DASHBOARDS_VERSION=${{ steps.platform.outputs.version }} \
-            -v "${{ github.workspace }}/plugins/main:/home/node/kbn/plugins/wazuh" \
-            quay.io/wazuh/osd-dev:${{ steps.platform.outputs.version }} \
-            bash -lc '
-              set -euo pipefail
-              cd /home/node/kbn/plugins/wazuh
-              yarn test:jest
-            '
 
       - name: Upload plugin ZIP
         uses: actions/upload-artifact@v4
