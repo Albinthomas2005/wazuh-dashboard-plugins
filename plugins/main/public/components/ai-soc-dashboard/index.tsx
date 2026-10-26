@@ -191,7 +191,7 @@ export const AISocDashboard: React.FC = () => {
               <EuiSpacer size='m' />
               <EuiFlexGroup>
                 <EuiFlexItem>
-                  <EuiFormRow label='Alert index' helpText='Example: wazuh-alerts-4.x-*'>
+                  <EuiFormRow label='Alert index' helpText='Example: wazuh-alerts-4.x-2026.10.26'>
                     <EuiFieldText
                       value={index}
                       onChange={event => {
