@@ -16,7 +16,7 @@ import {
   EuiTitle,
 } from '@elastic/eui';
 import { useHistory } from 'react-router-dom';
-import { WzRequest } from '../react-services/wz-request';
+import { WzRequest } from '../../react-services/wz-request';
 
 type CapabilityStatus = 'Available' | 'Planned';
 
