@@ -62,12 +62,16 @@ jobs:
             ./node_modules/.bin/eslint --plugin import --no-cache \
               public/components/common/wazuh-discover/components/ai-analysis-tab.tsx \
               public/components/common/wazuh-discover/components/ai-analysis-tab.test.tsx \
+              public/components/ai-soc-dashboard/index.tsx \
+              public/components/ai-soc-dashboard/index.test.tsx \
               server/controllers/wazuh-ai.ts \
               server/routes/wazuh-ai.ts \
               server/routes/wazuh-ai.test.ts
             yarn prettier --check \
               public/components/common/wazuh-discover/components/ai-analysis-tab.tsx \
               public/components/common/wazuh-discover/components/ai-analysis-tab.test.tsx \
+              public/components/ai-soc-dashboard/index.tsx \
+              public/components/ai-soc-dashboard/index.test.tsx \
               server/controllers/wazuh-ai.ts \
               server/routes/wazuh-ai.ts \
               server/routes/wazuh-ai.test.ts --config /tmp/wazuh-plugin-prettierrc
