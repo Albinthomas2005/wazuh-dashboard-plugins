@@ -240,6 +240,26 @@ export const ITHygiene = {
     }`,
 };
 
+export const aiSocDashboard = {
+  category: 'wz-category-security-operations',
+  id: 'ai-soc-dashboard',
+  title: i18n.translate('wz-app-ai-soc-dashboard-title', {
+    defaultMessage: 'AI SOC Dashboard',
+  }),
+  breadcrumbLabel: i18n.translate('wz-app-ai-soc-dashboard-breadcrumbLabel', {
+    defaultMessage: 'AI SOC Dashboard',
+  }),
+  description: i18n.translate('wz-app-ai-soc-dashboard-description', {
+    defaultMessage:
+      'AI-assisted alert triage, investigation, and incident reporting.',
+  }),
+  euiIconType: 'securityAnalyticsApp',
+  order: 406,
+  showInOverviewApp: true,
+  showInAgentMenu: false,
+  redirectTo: () => '/ai-soc',
+};
+
 const pciDss = {
   category: 'wz-category-security-operations',
   id: 'pci-dss',
@@ -901,6 +921,7 @@ export const Applications = [
   appSettings,
   about,
   ITHygiene,
+  aiSocDashboard,
 ].sort((a, b) => {
   // Sort applications by order
   if (a.order < b.order) {

@@ -17,6 +17,7 @@ import { MainEndpointsSummary } from './components/endpoints-summary';
 import { AgentView } from './components/endpoints-summary/agent';
 import WzManagement from './controllers/management/components/management/management-provider';
 import { Overview } from './components/overview/overview';
+import { AISocDashboard } from './components/ai-soc-dashboard';
 import { Settings } from './components/settings';
 import { WzSecurity } from './components/security';
 import $ from 'jquery';
@@ -104,6 +105,11 @@ export function Application(props) {
           path={`/${SECTIONS.BLANK_SCREEN}`}
           exact
           render={props => <WzBlankScreen {...props} />}
+        ></Route>
+        <Route
+          path='/ai-soc'
+          exact
+          render={AISocDashboard}
         ></Route>
         <Redirect from='/' to={getWzMainParams()} />
       </Switch>
